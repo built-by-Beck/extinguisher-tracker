@@ -47,11 +47,11 @@ const PricingPage = () => {
 
       {/* Pricing Cards */}
       <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
-        <div className="grid md:grid-cols-2 gap-8 max-w-5xl mx-auto">
-          {/* Starter Plan */}
+        <div className="grid md:grid-cols-3 gap-8 max-w-6xl mx-auto">
+          {/* Basic Plan */}
           <div className="bg-white rounded-lg shadow-lg p-8 border-2 border-gray-200">
             <div className="text-center mb-8">
-              <h3 className="text-2xl font-bold text-gray-900 mb-2">Starter</h3>
+              <h3 className="text-2xl font-bold text-gray-900 mb-2">Basic</h3>
               <p className="text-gray-600 mb-4">Perfect for small facilities</p>
               <div className="mb-4">
                 <span className="text-4xl font-bold text-gray-900">$29</span>
@@ -100,14 +100,14 @@ const PricingPage = () => {
             </ul>
 
             <Link
-              to="/app"
+              to="/signup?plan=basic"
               className="block w-full bg-gray-200 text-gray-900 text-center py-3 rounded-lg font-semibold hover:bg-gray-300 transition"
             >
-              Start Free Trial
+              Get Started
             </Link>
           </div>
 
-          {/* Professional Plan (Most Popular) */}
+          {/* Pro Plan (Most Popular) */}
           <div className="bg-white rounded-lg shadow-2xl p-8 border-4 border-red-600 relative">
             <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
               <span className="bg-red-600 text-white px-6 py-2 rounded-full text-sm font-bold">
@@ -116,13 +116,13 @@ const PricingPage = () => {
             </div>
 
             <div className="text-center mb-8 mt-4">
-              <h3 className="text-2xl font-bold text-gray-900 mb-2">Professional</h3>
+              <h3 className="text-2xl font-bold text-gray-900 mb-2">Pro</h3>
               <p className="text-gray-600 mb-4">For growing organizations</p>
               <div className="mb-4">
                 <span className="text-4xl font-bold text-gray-900">$79</span>
                 <span className="text-gray-600">/month</span>
               </div>
-              <p className="text-sm text-gray-500">Billed monthly or $790/year (save 2 months)</p>
+              <p className="text-sm text-gray-500">Billed monthly</p>
             </div>
 
             <ul className="space-y-4 mb-8">
@@ -132,7 +132,7 @@ const PricingPage = () => {
               </li>
               <li className="flex items-center gap-3">
                 <Check className="h-5 w-5 text-green-600 flex-shrink-0" />
-                <span>Everything in Starter, plus:</span>
+                <span>Everything in Basic, plus:</span>
               </li>
               <li className="flex items-center gap-3">
                 <Check className="h-5 w-5 text-green-600 flex-shrink-0" />
@@ -161,11 +161,65 @@ const PricingPage = () => {
             </ul>
 
             <Link
-              to="/app"
+              to="/signup?plan=pro"
               className="block w-full bg-red-600 text-white text-center py-3 rounded-lg font-semibold hover:bg-red-700 transition"
             >
-              Start Free Trial
+              Get Started
             </Link>
+          </div>
+
+          {/* Enterprise Plan */}
+          <div className="bg-white rounded-lg shadow-lg p-8 border-2 border-gray-200">
+            <div className="text-center mb-8">
+              <h3 className="text-2xl font-bold text-gray-900 mb-2">Enterprise</h3>
+              <p className="text-gray-600 mb-4">For large organizations</p>
+              <div className="mb-4">
+                <span className="text-4xl font-bold text-gray-900">Custom</span>
+              </div>
+              <p className="text-sm text-gray-500">Call for pricing</p>
+            </div>
+
+            <ul className="space-y-4 mb-8">
+              <li className="flex items-center gap-3">
+                <Check className="h-5 w-5 text-green-600 flex-shrink-0" />
+                <span className="font-semibold">Unlimited fire extinguishers</span>
+              </li>
+              <li className="flex items-center gap-3">
+                <Check className="h-5 w-5 text-green-600 flex-shrink-0" />
+                <span>Everything in Pro, plus:</span>
+              </li>
+              <li className="flex items-center gap-3">
+                <Check className="h-5 w-5 text-green-600 flex-shrink-0" />
+                <span>Custom integrations</span>
+              </li>
+              <li className="flex items-center gap-3">
+                <Check className="h-5 w-5 text-green-600 flex-shrink-0" />
+                <span>Dedicated account manager</span>
+              </li>
+              <li className="flex items-center gap-3">
+                <Check className="h-5 w-5 text-green-600 flex-shrink-0" />
+                <span>Priority 24/7 support</span>
+              </li>
+              <li className="flex items-center gap-3">
+                <Check className="h-5 w-5 text-green-600 flex-shrink-0" />
+                <span>Custom training</span>
+              </li>
+              <li className="flex items-center gap-3">
+                <Check className="h-5 w-5 text-green-600 flex-shrink-0" />
+                <span>API access</span>
+              </li>
+              <li className="flex items-center gap-3">
+                <Check className="h-5 w-5 text-green-600 flex-shrink-0" />
+                <span>SLA guarantee</span>
+              </li>
+            </ul>
+
+            <a
+              href="mailto:sales@extinguishertracker.com?subject=Enterprise%20Inquiry"
+              className="block w-full bg-gray-900 text-white text-center py-3 rounded-lg font-semibold hover:bg-gray-800 transition"
+            >
+              Contact Sales
+            </a>
           </div>
 
         </div>
@@ -249,7 +303,7 @@ const PricingPage = () => {
             No credit card required. Full access to all features. Cancel anytime.
           </p>
           <Link
-            to="/app"
+            to="/signup"
             className="bg-white text-red-600 px-8 py-4 rounded-lg text-lg font-semibold hover:bg-gray-100 transition inline-block"
           >
             Get Started Now

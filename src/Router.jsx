@@ -5,6 +5,7 @@ import PricingPage from './pages/PricingPage';
 import AboutPage from './pages/AboutPage';
 import TermsPage from './pages/TermsPage';
 import PrivacyPage from './pages/PrivacyPage';
+import SignupPage from './pages/SignupPage';
 import App from './App';
 
 /**
@@ -25,6 +26,7 @@ const Router = () => {
       <Route path="/about" element={<AboutPage />} />
       <Route path="/terms" element={<TermsPage />} />
       <Route path="/privacy" element={<PrivacyPage />} />
+      <Route path="/signup" element={<SignupPage />} />
 
       {/* Main Application - No ads shown here */}
       <Route path="/app/*" element={<App />} />

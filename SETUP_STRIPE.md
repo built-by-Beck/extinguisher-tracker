@@ -90,8 +90,9 @@ firebase deploy --only functions
 
 2. Copy the webhook URL from the deployment output. It will look like:
 ```
-https://us-central1-fire-extinguisher-tracke-9e98f.cloudfunctions.net/stripeWebhook
+https://us-central1-YOUR_PROJECT_ID.cloudfunctions.net/stripeWebhook
 ```
+(Replace `YOUR_PROJECT_ID` with your actual Firebase project ID)
 
 3. In Stripe Dashboard, go to **Developers** → **Webhooks** → **Add endpoint**
 4. Paste your webhook URL

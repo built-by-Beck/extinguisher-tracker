@@ -14,6 +14,8 @@ import SectionDetail from './components/SectionDetail';
 import ExtinguisherDetailView from './components/ExtinguisherDetailView';
 import Calculator from './components/Calculator.jsx';
 
+// Legacy SECTIONS array - kept for reference but not used
+// Buildings are now user-defined and loaded from Firestore
 const SECTIONS = [
   'Main Hospital',
   'Building A',
@@ -31,7 +33,7 @@ function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [extinguishers, setExtinguishers] = useState([]);
-  const [selectedSection, setSelectedSection] = useState('Main Hospital');
+  const [selectedSection, setSelectedSection] = useState('All');
   const [searchTerm, setSearchTerm] = useState('');
   const [view, setView] = useState('pending');
   const [scanMode, setScanMode] = useState(false);
@@ -45,7 +47,7 @@ function App() {
   const [editItem, setEditItem] = useState(null);
   const [showMenu, setShowMenu] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
-  const [importSection, setImportSection] = useState('Main Hospital');
+  const [importSection, setImportSection] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
   const [showTimeModal, setShowTimeModal] = useState(false);
   const [newItem, setNewItem] = useState({
@@ -53,7 +55,7 @@ function App() {
     serial: '',
     vicinity: '',
     parentLocation: '',
-    section: 'Main Hospital'
+    section: ''
   });
   const [newItemPhoto, setNewItemPhoto] = useState(null);
   const [newItemGps, setNewItemGps] = useState(null);
@@ -69,7 +71,7 @@ function App() {
   const [sectionNotes, setSectionNotes] = useState({});
   const [showSectionNotesModal, setShowSectionNotesModal] = useState(false);
   const [currentSectionNote, setCurrentSectionNote] = useState('');
-  const [noteSelectedSection, setNoteSelectedSection] = useState('Main Hospital');
+  const [noteSelectedSection, setNoteSelectedSection] = useState('');
 
   // Export options state
   const [showExportModal, setShowExportModal] = useState(false);
@@ -114,6 +116,13 @@ function App() {
 
   // Status filter view state (for clickable status boxes)
   const [statusFilterView, setStatusFilterView] = useState(null); // 'pending', 'pass', 'fail', or null
+
+  // Buildings state (user-defined sections/buildings)
+  const [buildings, setBuildings] = useState([]);
+  const [showBuildingsModal, setShowBuildingsModal] = useState(false);
+  const [newBuildingName, setNewBuildingName] = useState('');
+  const [editingBuilding, setEditingBuilding] = useState(null);
+  const [editBuildingName, setEditBuildingName] = useState('');
 
   const scanInputRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -311,6 +320,90 @@ function App() {
     });
 
     return () => unsubscribeReplaced();
+  }, [user]);
+
+  // Load user buildings
+  useEffect(() => {
+    if (!user) {
+      setBuildings([]);
+      return;
+    }
+
+    const buildingsQuery = query(
+      collection(db, 'buildings'),
+      where('userId', '==', user.uid)
+    );
+
+    const unsubscribeBuildings = onSnapshot(buildingsQuery, async (snapshot) => {
+      const buildingsData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      
+      // Sort by name
+      buildingsData.sort((a, b) => a.name.localeCompare(b.name));
+      setBuildings(buildingsData);
+
+      // If no buildings exist, check if user has existing extinguishers with sections
+      // and migrate those sections to buildings, or create a default building
+      if (buildingsData.length === 0) {
+        const extinguishersQuery = query(
+          collection(db, 'extinguishers'),
+          where('userId', '==', user.uid)
+        );
+        const extinguishersSnap = await getDocs(extinguishersQuery);
+        
+        if (extinguishersSnap.docs.length > 0) {
+          // Get unique sections from existing extinguishers
+          const uniqueSections = [...new Set(extinguishersSnap.docs.map(doc => doc.data().section).filter(Boolean))];
+          
+          if (uniqueSections.length > 0) {
+            // Migrate existing sections to buildings
+            const batch = writeBatch(db);
+            uniqueSections.forEach(sectionName => {
+              const buildingRef = doc(collection(db, 'buildings'));
+              batch.set(buildingRef, {
+                userId: user.uid,
+                name: sectionName,
+                createdAt: new Date().toISOString()
+              });
+            });
+            await batch.commit();
+          } else {
+            // Create a default building
+            await addDoc(collection(db, 'buildings'), {
+              userId: user.uid,
+              name: 'Main Building',
+              createdAt: new Date().toISOString()
+            });
+          }
+        } else {
+          // New user - create a default building
+          await addDoc(collection(db, 'buildings'), {
+            userId: user.uid,
+            name: 'Main Building',
+            createdAt: new Date().toISOString()
+          });
+        }
+      }
+
+      // Update selectedSection if it's not in the buildings list
+      if (buildingsData.length > 0) {
+        const buildingNames = buildingsData.map(b => b.name);
+        if (selectedSection === '' || (!buildingNames.includes(selectedSection) && selectedSection !== 'All')) {
+          // Keep 'All' if it was selected, otherwise use first building
+          if (selectedSection !== 'All') {
+            setSelectedSection(buildingNames[0]);
+          }
+        }
+        // Set default import section if not set (only once)
+        if (!importSection || !buildingNames.includes(importSection)) {
+          setImportSection(buildingNames[0]);
+        }
+      }
+    });
+
+    return () => unsubscribeBuildings();
   }, [user]);
 
   useEffect(() => {
@@ -626,7 +719,7 @@ function App() {
 
       if (savedSession) {
         const session = JSON.parse(savedSession);
-        setSelectedSection(session.selectedSection || 'Main Hospital');
+        setSelectedSection(session.selectedSection || 'All');
         setView(session.view || 'pending');
         setSearchTerm(session.searchTerm || '');
       }
@@ -1268,12 +1361,13 @@ function App() {
 
       await addDoc(collection(db, 'extinguishers'), item);
       setShowAddModal(false);
+      const firstBuilding = getBuildingNames()[0] || '';
       setNewItem({
         assetId: '',
         serial: '',
         vicinity: '',
         parentLocation: '',
-        section: 'Main Hospital'
+        section: firstBuilding
       });
       setNewItemPhoto(null);
       setNewItemGps(null);
@@ -1701,7 +1795,7 @@ function App() {
   };
 
   const exportTimeData = () => {
-    const timeData = SECTIONS.map(section => ({
+    const timeData = getBuildingNames().map(section => ({
       'Section': section,
       'Time Spent': formatTime(sectionTimes[section] || 0),
       'Total Milliseconds': sectionTimes[section] || 0,
@@ -1879,8 +1973,10 @@ function App() {
 
   // Section notes functions
   const openSectionNotes = () => {
-    setNoteSelectedSection(selectedSection); // Start with current section
-    const currentNote = sectionNotes[selectedSection]?.notes || '';
+    // Start with current section if it's not 'All', otherwise use first building
+    const sectionToUse = selectedSection !== 'All' ? selectedSection : (getBuildingNames()[0] || '');
+    setNoteSelectedSection(sectionToUse);
+    const currentNote = sectionNotes[sectionToUse]?.notes || '';
     setCurrentSectionNote(currentNote);
     setShowSectionNotesModal(true);
   };
@@ -1950,6 +2046,126 @@ function App() {
       console.error('Error saving section notes:', { code: error?.code, message: error?.message, section: noteSelectedSection });
       alert(`Error saving section notes for "${noteSelectedSection}".\n\n${error?.code || ''} ${error?.message || ''}`.trim());
     }
+  };
+
+  // Building management functions
+  const handleAddBuilding = async () => {
+    if (!newBuildingName.trim()) {
+      alert('Building name is required');
+      return;
+    }
+
+    // Check if building name already exists
+    const existingBuilding = buildings.find(b => b.name.toLowerCase().trim() === newBuildingName.toLowerCase().trim());
+    if (existingBuilding) {
+      alert('A building with this name already exists');
+      return;
+    }
+
+    try {
+      await addDoc(collection(db, 'buildings'), {
+        userId: user.uid,
+        name: newBuildingName.trim(),
+        createdAt: new Date().toISOString()
+      });
+      setNewBuildingName('');
+      alert('Building added successfully!');
+    } catch (error) {
+      console.error('Error adding building:', error);
+      alert('Error adding building. Please try again.');
+    }
+  };
+
+  const handleEditBuilding = async () => {
+    if (!editBuildingName.trim()) {
+      alert('Building name is required');
+      return;
+    }
+
+    // Check if building name already exists (excluding the one being edited)
+    const existingBuilding = buildings.find(b => 
+      b.id !== editingBuilding.id && 
+      b.name.toLowerCase().trim() === editBuildingName.toLowerCase().trim()
+    );
+    if (existingBuilding) {
+      alert('A building with this name already exists');
+      return;
+    }
+
+    try {
+      const docRef = doc(db, 'buildings', editingBuilding.id);
+      await updateDoc(docRef, {
+        name: editBuildingName.trim(),
+        updatedAt: new Date().toISOString()
+      });
+      setEditingBuilding(null);
+      setEditBuildingName('');
+      alert('Building updated successfully!');
+    } catch (error) {
+      console.error('Error updating building:', error);
+      alert('Error updating building. Please try again.');
+    }
+  };
+
+  const handleDeleteBuilding = async (buildingId, buildingName) => {
+    // Check if there are any extinguishers using this building
+    const extinguishersUsingBuilding = extinguishers.filter(e => e.section === buildingName);
+    
+    if (extinguishersUsingBuilding.length > 0) {
+      const confirmMessage = `This building has ${extinguishersUsingBuilding.length} extinguisher(s) assigned to it. Deleting it will remove the building assignment from those extinguishers. Are you sure you want to delete "${buildingName}"?`;
+      if (!window.confirm(confirmMessage)) {
+        return;
+      }
+
+      // Update extinguishers to remove the section (or set to first available building)
+      const batch = writeBatch(db);
+      const firstBuilding = buildings.find(b => b.id !== buildingId);
+      
+      extinguishersUsingBuilding.forEach(ext => {
+        const extRef = doc(db, 'extinguishers', ext.id);
+        if (firstBuilding) {
+          batch.update(extRef, { section: firstBuilding.name });
+        } else {
+          batch.update(extRef, { section: '' });
+        }
+      });
+      await batch.commit();
+    } else {
+      if (!window.confirm(`Are you sure you want to delete "${buildingName}"?`)) {
+        return;
+      }
+    }
+
+    try {
+      await deleteDoc(doc(db, 'buildings', buildingId));
+      alert('Building deleted successfully!');
+      
+      // If the deleted building was selected, switch to first available building
+      if (selectedSection === buildingName && buildings.length > 1) {
+        const remainingBuildings = buildings.filter(b => b.id !== buildingId);
+        if (remainingBuildings.length > 0) {
+          setSelectedSection(remainingBuildings[0].name);
+        }
+      }
+    } catch (error) {
+      console.error('Error deleting building:', error);
+      alert('Error deleting building. Please try again.');
+    }
+  };
+
+  const startEditBuilding = (building) => {
+    setEditingBuilding(building);
+    setEditBuildingName(building.name);
+  };
+
+  const cancelEditBuilding = () => {
+    setEditingBuilding(null);
+    setEditBuildingName('');
+  };
+
+  // Helper function to get building names array
+  const getBuildingNames = () => {
+    return buildings.map(b => b.name);
   };
 
   const getSectionViewMode = (section) => {
@@ -2250,7 +2466,7 @@ function App() {
     fail: extinguishers.filter(e => e.status === 'fail').length
   };
 
-  const sectionCounts = SECTIONS.map(section => {
+  const sectionCounts = getBuildingNames().map(section => {
     const items = extinguishers.filter(e => e.section === section);
     return {
       section,
@@ -2505,8 +2721,26 @@ function App() {
         {showMenu && (
           <div className="bg-white p-4 rounded-lg shadow-lg mb-6">
             <div className="space-y-2">
-              {/* Workspace Management */}
+              {/* Buildings Management */}
               <div className="mb-4">
+                <p className="text-sm text-gray-600 mb-2 font-medium">Buildings</p>
+                <div className="text-xs text-gray-500 mb-2">
+                  {buildings.length} building{buildings.length !== 1 ? 's' : ''} defined
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setShowBuildingsModal(true);
+                  setShowMenu(false);
+                }}
+                className="flex items-center gap-2 px-4 py-2 bg-purple-500 text-white rounded hover:bg-purple-600 transition w-full"
+              >
+                <Plus size={20} />
+                Manage Buildings
+              </button>
+
+              {/* Workspace Management */}
+              <div className="mb-4 mt-4">
                 <p className="text-sm text-gray-600 mb-2 font-medium">Inspection Months</p>
                 {getCurrentWorkspace() && (
                   <div className="text-xs text-gray-500 mb-2">
@@ -2864,7 +3098,7 @@ function App() {
           <Routes>
             <Route
               index
-              element={<SectionGrid sections={SECTIONS} extinguishers={extinguishers} />}
+              element={<SectionGrid sections={getBuildingNames()} extinguishers={extinguishers} />}
             />
             <Route
               path="section/:name"
@@ -2905,7 +3139,7 @@ function App() {
             </div>
 
             <div className="space-y-3 mb-4">
-              {SECTIONS.map(section => {
+              {getBuildingNames().map(section => {
                 const time = getTotalTime(section);
                 return (
                   <div key={section} className="flex justify-between items-center p-3 bg-gray-50 rounded">
@@ -2982,7 +3216,7 @@ function App() {
                 onChange={(e) => handleNoteSectionChange(e.target.value)}
                 className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-4"
               >
-                {SECTIONS.map(section => (
+                {getBuildingNames().map(section => (
                   <option key={section} value={section}>
                     {section}
                     {sectionNotes[section]?.notes && ' ✓'}
@@ -3033,6 +3267,132 @@ function App() {
         </div>
       )}
 
+      {showBuildingsModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50 overflow-y-auto">
+          <div className="bg-white rounded-lg p-6 max-w-3xl w-full my-8">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-bold">Manage Buildings</h3>
+              <button onClick={() => {
+                setShowBuildingsModal(false);
+                setEditingBuilding(null);
+                setNewBuildingName('');
+                setEditBuildingName('');
+              }}>
+                <X size={24} />
+              </button>
+            </div>
+
+            <div className="mb-6">
+              <h4 className="font-semibold mb-3">Add New Building</h4>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={newBuildingName}
+                  onChange={(e) => setNewBuildingName(e.target.value)}
+                  onKeyPress={(e) => {
+                    if (e.key === 'Enter') {
+                      handleAddBuilding();
+                    }
+                  }}
+                  placeholder="Enter building name (e.g., Main Hospital, Building A)"
+                  className="flex-1 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                />
+                <button
+                  onClick={handleAddBuilding}
+                  className="px-6 bg-purple-500 text-white p-3 rounded-lg hover:bg-purple-600 flex items-center gap-2"
+                >
+                  <Plus size={20} />
+                  Add
+                </button>
+              </div>
+            </div>
+
+            <div className="border-t pt-4">
+              <h4 className="font-semibold mb-3">Your Buildings ({buildings.length})</h4>
+              {buildings.length === 0 ? (
+                <p className="text-gray-500 text-center py-8">No buildings defined yet. Add your first building above.</p>
+              ) : (
+                <div className="space-y-2 max-h-96 overflow-y-auto">
+                  {buildings.map((building) => {
+                    const extinguisherCount = extinguishers.filter(e => e.section === building.name).length;
+                    return (
+                      <div
+                        key={building.id}
+                        className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200"
+                      >
+                        {editingBuilding?.id === building.id ? (
+                          <div className="flex items-center gap-2 flex-1">
+                            <input
+                              type="text"
+                              value={editBuildingName}
+                              onChange={(e) => setEditBuildingName(e.target.value)}
+                              onKeyPress={(e) => {
+                                if (e.key === 'Enter') {
+                                  handleEditBuilding();
+                                } else if (e.key === 'Escape') {
+                                  cancelEditBuilding();
+                                }
+                              }}
+                              className="flex-1 p-2 border border-gray-300 rounded focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                              autoFocus
+                            />
+                            <button
+                              onClick={handleEditBuilding}
+                              className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
+                            >
+                              <Save size={16} />
+                            </button>
+                            <button
+                              onClick={cancelEditBuilding}
+                              className="px-4 py-2 bg-gray-300 text-gray-700 rounded hover:bg-gray-400"
+                            >
+                              <X size={16} />
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="flex-1">
+                              <div className="font-medium">{building.name}</div>
+                              <div className="text-sm text-gray-600">
+                                {extinguisherCount} extinguisher{extinguisherCount !== 1 ? 's' : ''}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => startEditBuilding(building)}
+                                className="px-3 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 flex items-center gap-1"
+                              >
+                                <Edit2 size={16} />
+                                Edit
+                              </button>
+                              <button
+                                onClick={() => handleDeleteBuilding(building.id, building.name)}
+                                className="px-3 py-2 bg-red-500 text-white rounded hover:bg-red-600 flex items-center gap-1"
+                                disabled={buildings.length === 1}
+                              >
+                                <X size={16} />
+                                Delete
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-6 pt-4 border-t">
+              <p className="text-sm text-gray-600">
+                <strong>Tip:</strong> Buildings (sections) help you organize your fire extinguishers by location. 
+                Each building can have multiple extinguishers assigned to it. You can upload extinguisher data for each building.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showImportModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg p-6 max-w-md w-full">
@@ -3052,7 +3412,7 @@ function App() {
                   onChange={(e) => setImportSection(e.target.value)}
                   className="w-full p-2 border border-gray-300 rounded-lg"
                 >
-                  {SECTIONS.map(section => (
+                  {getBuildingNames().map(section => (
                     <option key={section} value={section}>{section}</option>
                   ))}
                 </select>
@@ -3154,7 +3514,7 @@ function App() {
                   onChange={(e) => setNewItem({...newItem, section: e.target.value})}
                   className="w-full p-2 border border-gray-300 rounded-lg"
                 >
-                  {SECTIONS.map(section => (
+                  {getBuildingNames().map(section => (
                     <option key={section} value={section}>{section}</option>
                   ))}
                 </select>
@@ -3616,7 +3976,7 @@ function App() {
                   onChange={(e) => setEditItem({...editItem, section: e.target.value})}
                   className="w-full p-2 border border-gray-300 rounded-lg"
                 >
-                  {SECTIONS.map(section => (
+                  {getBuildingNames().map(section => (
                     <option key={section} value={section}>{section}</option>
                   ))}
                 </select>

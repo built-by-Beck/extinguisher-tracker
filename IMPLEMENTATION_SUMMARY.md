@@ -180,3 +180,5 @@ If you encounter any issues:
 3. Check Firebase Functions logs: `firebase functions:log`
 4. Verify webhook events in Stripe Dashboard
 
+
+

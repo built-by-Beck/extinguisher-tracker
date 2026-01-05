@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Routes, Route, useNavigate, Link } from 'react-router-dom';
+import { Routes, Route, useNavigate, Link, useSearchParams } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { Search, Upload, CheckCircle, XCircle, Circle, Download, Filter, Edit2, Save, X, Menu, ScanLine, Plus, Clock, Play, Pause, StopCircle, LogOut, Camera, Calendar, Settings, RotateCcw, FileText, Calculator as CalculatorIcon, Shield, History } from 'lucide-react';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, where, getDocs, setDoc, getDocs as getDocsOnce, writeBatch } from 'firebase/firestore';
+import { collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, where, getDocs, getDoc, setDoc, writeBatch } from 'firebase/firestore';
 import { auth, db, storage, workspacesRef } from './firebase';
 import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { deleteObject } from 'firebase/storage';
@@ -128,7 +128,9 @@ function App() {
   // Subscription state
   const [userDoc, setUserDoc] = useState(null);
   const [subscriptionValid, setSubscriptionValid] = useState(false);
+  const [showCheckoutSuccess, setShowCheckoutSuccess] = useState(false);
 
+  const [searchParams, setSearchParams] = useSearchParams();
   const scanInputRef = useRef(null);
   const fileInputRef = useRef(null);
   const dbBackupInputRef = useRef(null);
@@ -143,6 +145,21 @@ function App() {
     });
     return () => unsubscribe();
   }, []);
+
+  // Handle checkout success
+  useEffect(() => {
+    const checkout = searchParams.get('checkout');
+    if (checkout === 'success') {
+      setShowCheckoutSuccess(true);
+      // Remove the query parameter from URL
+      setSearchParams({}, { replace: true });
+      // Hide success message after 5 seconds
+      const timer = setTimeout(() => {
+        setShowCheckoutSuccess(false);
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [searchParams, setSearchParams]);
 
   // Load user document and check subscription
   useEffect(() => {
@@ -1617,26 +1634,96 @@ function App() {
   };
 
   const handleEdit = (item) => {
-    setEditItem({ ...item });
+    // Store the original buildingId to detect if building changed
+    setEditItem({ ...item, originalBuildingId: item.buildingId });
   };
 
   const saveEdit = async () => {
     if (!editItem) return;
 
     try {
-      const docRef = getExtinguisherDoc(editItem);
-      await updateDoc(docRef, {
-        assetId: editItem.assetId,
-        vicinity: editItem.vicinity,
-        serial: editItem.serial,
-        parentLocation: editItem.parentLocation,
-        section: editItem.section,
-        location: editItem.location || null
-      });
+      // Check if section (building) has changed - if so, we need to move the extinguisher
+      const oldBuildingId = editItem.originalBuildingId || editItem.buildingId || getBuildingIdFromSection(editItem.section);
+      const newBuildingId = getBuildingIdFromSection(editItem.section);
+      
+      if (!newBuildingId) {
+        alert('Building not found. Please select a valid building.');
+        return;
+      }
+
+      // If building changed, we need to move the extinguisher to the new building's subcollection
+      if (oldBuildingId && oldBuildingId !== newBuildingId) {
+        // Get the old document data
+        const oldDocRef = doc(db, 'buildings', oldBuildingId, 'extinguishers', editItem.id);
+        
+        try {
+          const oldDocSnap = await getDoc(oldDocRef);
+          
+          if (oldDocSnap.exists()) {
+            const oldData = oldDocSnap.data();
+            // Create in new building with updated data
+            const newItemData = {
+              ...oldData,
+              assetId: editItem.assetId,
+              vicinity: editItem.vicinity,
+              serial: editItem.serial,
+              parentLocation: editItem.parentLocation,
+              section: editItem.section,
+              buildingId: newBuildingId,
+              location: editItem.location || null,
+              updatedAt: new Date().toISOString()
+            };
+            
+            await addDoc(getExtinguisherCollection(newBuildingId), newItemData);
+            
+            // Delete from old building
+            await deleteDoc(oldDocRef);
+          } else {
+            // Fallback: try to get from current extinguishers state
+            const currentItem = extinguishers.find(e => e.id === editItem.id);
+            if (currentItem) {
+              // Create in new building with updated data
+              const newItemData = {
+                ...currentItem,
+                assetId: editItem.assetId,
+                vicinity: editItem.vicinity,
+                serial: editItem.serial,
+                parentLocation: editItem.parentLocation,
+                section: editItem.section,
+                buildingId: newBuildingId,
+                location: editItem.location || null,
+                updatedAt: new Date().toISOString()
+              };
+              delete newItemData.id; // Remove id before adding
+              
+              await addDoc(getExtinguisherCollection(newBuildingId), newItemData);
+            } else {
+              throw new Error('Could not find extinguisher to move');
+            }
+          }
+        } catch (error) {
+          console.error('Error moving extinguisher to new building:', error);
+          alert('Error moving extinguisher. Please try again.');
+          return;
+        }
+      } else {
+        // Same building, just update the document
+        const docRef = getExtinguisherDoc(editItem);
+        await updateDoc(docRef, {
+          assetId: editItem.assetId,
+          vicinity: editItem.vicinity,
+          serial: editItem.serial,
+          parentLocation: editItem.parentLocation,
+          section: editItem.section,
+          buildingId: newBuildingId, // Ensure buildingId is set
+          location: editItem.location || null,
+          updatedAt: new Date().toISOString()
+        });
+      }
 
       // Update selectedItem if it's the same item being edited
       if (selectedItem && selectedItem.id === editItem.id) {
-        setSelectedItem({ ...editItem });
+        setSelectedItem({ ...editItem, buildingId: newBuildingId });
       }
 
       setEditItem(null);
@@ -2225,27 +2312,34 @@ function App() {
 
   const handleDeleteBuilding = async (buildingId, buildingName) => {
     // Check if there are any extinguishers using this building
-    const extinguishersUsingBuilding = extinguishers.filter(e => e.section === buildingName);
+    const extinguishersUsingBuilding = extinguishers.filter(e => e.buildingId === buildingId || e.section === buildingName);
     
     if (extinguishersUsingBuilding.length > 0) {
-      const confirmMessage = `This building has ${extinguishersUsingBuilding.length} extinguisher(s) assigned to it. Deleting it will remove the building assignment from those extinguishers. Are you sure you want to delete "${buildingName}"?`;
+      const confirmMessage = `This building has ${extinguishersUsingBuilding.length} extinguisher(s) assigned to it. Deleting it will permanently delete all extinguishers in this building. Are you sure you want to delete "${buildingName}"?`;
       if (!window.confirm(confirmMessage)) {
         return;
       }
 
-      // Update extinguishers to remove the section (or set to first available building)
-      const batch = writeBatch(db);
-      const firstBuilding = buildings.find(b => b.id !== buildingId);
-      
-      extinguishersUsingBuilding.forEach(ext => {
-        const extRef = doc(db, 'extinguishers', ext.id);
-        if (firstBuilding) {
-          batch.update(extRef, { section: firstBuilding.name });
-        } else {
-          batch.update(extRef, { section: '' });
+      // Delete all extinguishers in this building's subcollection
+      try {
+        const buildingExtinguishersQuery = query(
+          getExtinguisherCollection(buildingId),
+          where('userId', '==', user.uid)
+        );
+        const extinguisherSnap = await getDocs(buildingExtinguishersQuery);
+        
+        if (extinguisherSnap.docs.length > 0) {
+          const batch = writeBatch(db);
+          extinguisherSnap.docs.forEach(docSnap => {
+            batch.delete(docSnap.ref);
+          });
+          await batch.commit();
         }
-      });
-      await batch.commit();
+      } catch (error) {
+        console.error('Error deleting extinguishers:', error);
+        alert('Error deleting extinguishers. Building deletion cancelled.');
+        return;
+      }
     } else {
       if (!window.confirm(`Are you sure you want to delete "${buildingName}"?`)) {
         return;
@@ -2659,15 +2753,14 @@ function App() {
     <div className="min-h-screen bg-gradient-to-b from-gray-800 via-gray-900 to-black pb-20">
       <div className="max-w-6xl mx-auto p-4">
         {/* Banner Image */}
-        <div className="mb-2 rounded-lg overflow-hidden shadow-2xl" style={{ height: '270px' }}>
+        <div className="mb-2 rounded-lg overflow-hidden shadow-2xl h-32 sm:h-48 md:h-64">
           <img
             src={`${import.meta.env.BASE_URL}banner.png`}
             alt="Fire Extinguisher Tracker - built by Beck"
-            className="w-full"
+            className="w-full h-full"
             style={{
               objectFit: 'cover',
-              objectPosition: 'center 40%',
-              height: '100%'
+              objectPosition: 'center 40%'
             }}
             onError={(e) => {
               console.error('Banner image failed to load');
@@ -2685,8 +2778,8 @@ function App() {
 
         {/* Header with gradient and red border */}
         <div className="bg-gradient-to-r from-gray-700 to-gray-800 text-white p-4 rounded-lg shadow-lg mb-6 border border-red-900">
-          <div className="flex justify-between items-center">
-            <div className="flex items-center gap-4">
+          <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-4">
               <div className="text-sm">
                 <span className="text-gray-400">Fire Safety Management</span>
                 <Link to="/" className="text-white font-semibold ml-2 hover:text-red-400 transition">
@@ -2695,7 +2788,7 @@ function App() {
               </div>
               {/* Workspace Badge - Long press to switch */}
               <div
-                className={`ml-4 px-4 py-2 rounded-lg text-base font-bold cursor-pointer select-none transition-all shadow-md border-2 ${
+                className={`px-4 py-2 rounded-lg text-base font-bold cursor-pointer select-none transition-all shadow-md border-2 ${
                   workspaceBadgePressing
                     ? 'bg-yellow-400 text-yellow-900 scale-105 border-yellow-600'
                     : workspaces.length > 1
@@ -2720,37 +2813,46 @@ function App() {
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-400">Logged in as:</span>
-              <span className="text-sm text-white">{user.email}</span>
-              <button
-                onClick={() => navigate('/app/calculator')}
-                className="px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded flex items-center gap-2"
-                title="Open Fire Extinguisher Calculator"
-              >
-                <CalculatorIcon size={18} />
-                Calculator
-              </button>
-              <button
-                onClick={() => setAdminMode(!adminMode)}
-                className={`p-2 hover:bg-gray-600 rounded flex items-center gap-2 ${adminMode ? 'bg-gray-600' : ''}`}
-                title={adminMode ? 'Exit Admin Mode' : 'Admin Mode'}
-              >
-                <Settings size={18} />
-              </button>
-              <button
-                onClick={handleLogout}
-                className="p-2 hover:bg-gray-600 rounded flex items-center gap-2"
-                title="Logout"
-              >
-                <LogOut size={18} />
-              </button>
-              <button
-                onClick={() => setShowMenu(!showMenu)}
-                className="p-2 hover:bg-gray-600 rounded"
-              >
-                <Menu size={20} />
-              </button>
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+              {/* Email - hidden on mobile, shown on larger screens */}
+              <div className="hidden md:flex items-center gap-2">
+                <span className="text-xs text-gray-400">Logged in as:</span>
+                <span className="text-sm text-white truncate max-w-[150px]">{user.email}</span>
+              </div>
+              {/* Button row - wraps on mobile */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  onClick={() => navigate('/app/calculator')}
+                  className="px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded flex items-center gap-2 flex-shrink-0"
+                  title="Open Fire Extinguisher Calculator"
+                >
+                  <CalculatorIcon size={18} />
+                  <span className="hidden sm:inline">Calculator</span>
+                </button>
+                <button
+                  onClick={() => setAdminMode(!adminMode)}
+                  className={`p-2 hover:bg-gray-600 rounded flex items-center gap-2 flex-shrink-0 ${adminMode ? 'bg-gray-600' : ''}`}
+                  title={adminMode ? 'Exit Admin Mode' : 'Admin Mode'}
+                >
+                  <Settings size={18} />
+                  <span className="hidden sm:inline ml-1">Settings</span>
+                </button>
+                <button
+                  onClick={handleLogout}
+                  className="p-2 hover:bg-gray-600 rounded flex items-center gap-2 flex-shrink-0"
+                  title="Logout"
+                >
+                  <LogOut size={18} />
+                  <span className="hidden sm:inline ml-1">Logout</span>
+                </button>
+                <button
+                  onClick={() => setShowMenu(!showMenu)}
+                  className="p-2 hover:bg-gray-600 rounded flex-shrink-0"
+                  title="Menu"
+                >
+                  <Menu size={20} />
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -2758,22 +2860,22 @@ function App() {
         {selectedSection !== 'All' && (
           <>
             <div className="bg-white p-4 rounded-lg shadow-lg mb-6">
-              <div className="flex items-center justify-between mb-3">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-3 gap-2">
                 <div className="flex items-center gap-2">
                   <Clock size={20} className="text-gray-600" />
                   <h3 className="font-semibold text-lg">Time Tracking - {selectedSection}</h3>
                 </div>
                 <button
                   onClick={() => setShowTimeModal(true)}
-                  className="text-sm text-blue-600 hover:underline"
+                  className="text-sm text-blue-600 hover:underline self-start sm:self-auto"
                 >
                   View All Times
                 </button>
               </div>
 
-              <div className="flex items-center gap-4">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-4">
                 <div className="flex-1">
-                  <div className="text-3xl font-bold text-blue-600">
+                  <div className="text-2xl sm:text-3xl font-bold text-blue-600">
                     {formatTime(getTotalTime(selectedSection))}
                   </div>
                   <div className="text-sm text-gray-600">
@@ -2781,32 +2883,32 @@ function App() {
                   </div>
                 </div>
 
-                <div className="flex gap-2">
+                <div className="flex gap-2 flex-wrap">
                   {activeTimer === selectedSection ? (
                     <button
                       onClick={pauseTimer}
-                      className="flex items-center gap-2 px-4 py-2 bg-orange-500 text-white rounded hover:bg-orange-600"
+                      className="flex items-center gap-2 px-4 py-2 bg-orange-500 text-white rounded hover:bg-orange-600 flex-shrink-0"
                     >
                       <Pause size={20} />
-                      Pause
+                      <span className="whitespace-nowrap">Pause</span>
                     </button>
                   ) : (
                     <button
                       onClick={() => startTimer(selectedSection)}
-                      className="flex items-center gap-2 px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
+                      className="flex items-center gap-2 px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 flex-shrink-0"
                     >
                       <Play size={20} />
-                      Start Timer
+                      <span className="whitespace-nowrap">Start Timer</span>
                     </button>
                   )}
 
                   {activeTimer && (
                     <button
                       onClick={stopTimer}
-                      className="flex items-center gap-2 px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
+                      className="flex items-center gap-2 px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600 flex-shrink-0"
                     >
                       <StopCircle size={20} />
-                      Stop
+                      <span className="whitespace-nowrap">Stop</span>
                     </button>
                   )}
                 </div>
@@ -2815,8 +2917,8 @@ function App() {
 
             {/* Section Notes Card */}
             <div className="bg-white p-4 rounded-lg shadow-lg mb-6">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-3 gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <FileText size={20} className="text-gray-600" />
                   <h3 className="font-semibold text-lg">Section Notes</h3>
                   <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">
@@ -3116,6 +3218,29 @@ function App() {
           </div>
         )}
 
+        {/* Checkout Success Banner */}
+        {showCheckoutSuccess && (
+          <div className="bg-green-50 border-2 border-green-500 rounded-lg p-4 mb-6 shadow-lg">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <CheckCircle size={24} className="text-green-600" />
+                <div>
+                  <h3 className="font-semibold text-green-900">Payment Successful!</h3>
+                  <p className="text-sm text-green-700">
+                    Your subscription is now active. Thank you for your purchase!
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowCheckoutSuccess(false)}
+                className="text-green-600 hover:text-green-800"
+              >
+                <X size={20} />
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
           <div
             className="bg-white p-4 rounded-lg shadow text-center cursor-pointer hover:bg-gray-50 hover:shadow-md transition-all active:scale-95"
@@ -3172,7 +3297,7 @@ function App() {
 
         {/* Add New Building Button - Always Visible */}
         <div className="bg-white p-4 rounded-lg shadow mb-6">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div>
               <h3 className="font-semibold text-lg mb-1">Buildings</h3>
               <p className="text-sm text-gray-600">
@@ -3181,7 +3306,7 @@ function App() {
             </div>
             <button
               onClick={() => setShowBuildingsModal(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600 transition shadow-md"
+              className="flex items-center justify-center gap-2 px-4 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600 transition shadow-md w-full sm:w-auto"
             >
               <Plus size={20} />
               Add New Building

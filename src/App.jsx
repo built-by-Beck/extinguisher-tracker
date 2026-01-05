@@ -161,7 +161,27 @@ function App() {
     }
   }, [searchParams, setSearchParams]);
 
-  // Load user document and check subscription
+  // Helper function to determine tier from Stripe price ID
+  const getTierFromPriceId = (priceId) => {
+    if (!priceId) return SUBSCRIPTION_TIERS.BASIC;
+    
+    // Check if price ID contains tier name
+    const priceIdLower = priceId.toLowerCase();
+    if (priceIdLower.includes('pro') || priceIdLower.includes('professional')) {
+      return SUBSCRIPTION_TIERS.PRO;
+    }
+    if (priceIdLower.includes('enterprise')) {
+      return SUBSCRIPTION_TIERS.ENTERPRISE;
+    }
+    if (priceIdLower.includes('basic') || priceIdLower.includes('starter')) {
+      return SUBSCRIPTION_TIERS.BASIC;
+    }
+    
+    // Default to basic if unknown
+    return SUBSCRIPTION_TIERS.BASIC;
+  };
+
+  // Load user document and check subscription (including Stripe extension subscriptions)
   useEffect(() => {
     if (!user) {
       setUserDoc(null);
@@ -170,41 +190,149 @@ function App() {
     }
 
     const userDocRef = doc(db, 'users', user.uid);
+    const subscriptionsRef = collection(db, 'customers', user.uid, 'subscriptions');
+    
+    // Helper to convert Firestore timestamp to ISO string
+    const timestampToISO = (timestamp) => {
+      if (!timestamp) return null;
+      if (timestamp.toDate) {
+        return timestamp.toDate().toISOString();
+      }
+      if (timestamp.seconds) {
+        return new Date(timestamp.seconds * 1000).toISOString();
+      }
+      if (typeof timestamp === 'string') {
+        return timestamp;
+      }
+      return null;
+    };
+
+    // Sync subscription data from extension to user document
+    const syncSubscriptionToUser = async () => {
+      try {
+        const subscriptionsSnapshot = await getDocs(
+          query(subscriptionsRef, where('status', 'in', ['trialing', 'active', 'canceled', 'past_due']))
+        );
+        
+        const userDocSnapshot = await getDoc(userDocRef);
+        let userData = userDocSnapshot.exists() ? userDocSnapshot.data() : null;
+        
+        if (!subscriptionsSnapshot.empty) {
+          // Get the most recent subscription (prefer active/trialing)
+          const activeSubs = subscriptionsSnapshot.docs
+            .map(doc => ({ id: doc.id, ...doc.data() }))
+            .filter(sub => sub.status === 'active' || sub.status === 'trialing');
+          
+          const subscriptionDoc = activeSubs.length > 0 
+            ? subscriptionsSnapshot.docs.find(d => d.id === activeSubs[0].id)
+            : subscriptionsSnapshot.docs[0];
+          
+          const subscriptionData = subscriptionDoc.data();
+          
+          // Determine tier from price ID
+          const priceId = subscriptionData.price || subscriptionData.prices?.[0];
+          const tier = getTierFromPriceId(priceId);
+          const tierConfig = TIER_CONFIG[tier];
+          
+          // Map Stripe subscription status to app status
+          const stripeStatus = subscriptionData.status;
+          let appStatus = 'incomplete';
+          if (stripeStatus === 'active' || stripeStatus === 'trialing') {
+            appStatus = stripeStatus === 'trialing' ? 'trialing' : 'active';
+          } else if (stripeStatus === 'canceled' || stripeStatus === 'past_due') {
+            appStatus = stripeStatus;
+          }
+          
+          // Update user document with subscription info
+          const updatedUserData = {
+            ...(userData || {}),
+            userId: user.uid,
+            email: user.email,
+            subscriptionTier: tier,
+            subscriptionStatus: appStatus,
+            stripeSubscriptionId: subscriptionDoc.id,
+            limits: tierConfig.limits,
+            currentPeriodStart: timestampToISO(subscriptionData.current_period_start),
+            currentPeriodEnd: timestampToISO(subscriptionData.current_period_end),
+            updatedAt: new Date().toISOString(),
+          };
+          
+          // Ensure usage field exists
+          if (!updatedUserData.usage) {
+            updatedUserData.usage = { extinguisherCount: 0 };
+          }
+          
+          // Ensure createdAt exists
+          if (!updatedUserData.createdAt) {
+            updatedUserData.createdAt = new Date().toISOString();
+          }
+          
+          // Update user document
+          await setDoc(userDocRef, updatedUserData, { merge: true });
+          userData = updatedUserData;
+        } else if (!userData) {
+          // No subscription and no user document - create it if free access
+          if (hasFreeAccess(user.email)) {
+            // Create free access user document
+            const proConfig = TIER_CONFIG[SUBSCRIPTION_TIERS.PRO];
+            const freeUserData = {
+              userId: user.uid,
+              email: user.email,
+              subscriptionTier: SUBSCRIPTION_TIERS.PRO,
+              subscriptionStatus: 'active',
+              limits: proConfig.limits,
+              usage: { extinguisherCount: 0 },
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            };
+            await setDoc(userDocRef, freeUserData);
+            userData = freeUserData;
+          }
+        }
+        
+        return userData;
+      } catch (error) {
+        console.error('Error syncing subscription:', error);
+        return null;
+      }
+    };
+
+    // Listen to user document
     const unsubscribeUser = onSnapshot(userDocRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.data();
-        setUserDoc(data);
+      const userData = snapshot.exists() ? snapshot.data() : null;
+      
+      if (userData) {
+        setUserDoc(userData);
         
         // Check if subscription is active (includes free access check)
         const active = isSubscriptionActive(
-          data.subscriptionStatus,
-          data.trialEndsAt?.toDate?.()?.getTime() || null,
+          userData.subscriptionStatus,
+          userData.trialEndsAt ? new Date(userData.trialEndsAt).getTime() : null,
           user.email
         );
         setSubscriptionValid(active);
       } else {
-        // User document doesn't exist yet - create it if free access
-        if (hasFreeAccess(user.email)) {
-          // Create free access user document
-          const proConfig = TIER_CONFIG[SUBSCRIPTION_TIERS.PRO];
-          setDoc(userDocRef, {
-            userId: user.uid,
-            email: user.email,
-            subscriptionTier: SUBSCRIPTION_TIERS.PRO,
-            subscriptionStatus: 'active',
-            limits: proConfig.limits,
-            usage: { extinguisherCount: 0 },
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          });
-        } else {
-          setUserDoc(null);
-          setSubscriptionValid(false);
-        }
+        setUserDoc(null);
+        setSubscriptionValid(false);
       }
     });
 
-    return () => unsubscribeUser();
+    // Listen to subscriptions collection for real-time updates
+    const unsubscribeSubscriptions = onSnapshot(
+      query(subscriptionsRef, where('status', 'in', ['trialing', 'active', 'canceled', 'past_due', 'incomplete'])),
+      () => {
+        // When subscription changes, sync to user document
+        syncSubscriptionToUser();
+      }
+    );
+
+    // Initial sync
+    syncSubscriptionToUser();
+
+    return () => {
+      unsubscribeUser();
+      unsubscribeSubscriptions();
+    };
   }, [user]);
 
   // Load workspaces and handle migration

@@ -20,7 +20,14 @@ service cloud.firestore {
     // Users
     // -------------------------
     match /users/{userId} {
-      allow read, write: if isOwner(userId);
+      // Read: users can read their own document
+      allow read: if isOwner(userId);
+      
+      // Create: users can create their own user document (during signup)
+      allow create: if signedIn() && request.auth.uid == userId;
+      
+      // Update/Delete: users can update/delete their own document
+      allow update, delete: if isOwner(userId);
     }
 
     // -------------------------

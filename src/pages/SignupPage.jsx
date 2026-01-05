@@ -111,10 +111,28 @@ const SignupPage = () => {
         updatedAt: serverTimestamp(),
       };
 
-      await setDoc(doc(db, 'users', user.uid), userDoc);
+      try {
+        await setDoc(doc(db, 'users', user.uid), userDoc);
+      } catch (firestoreError) {
+        console.error('Firestore error:', firestoreError);
+        if (firestoreError.code === 'permission-denied') {
+          setError('Permission denied. Please check Firestore security rules allow user document creation.');
+        } else {
+          setError(`Failed to create user profile: ${firestoreError.message}`);
+        }
+        setLoading(false);
+        return;
+      }
 
       // Redirect to Stripe Checkout (payment required)
-      await redirectToCheckout(planConfig.pricing.monthly.stripePriceId, user.uid);
+      try {
+        await redirectToCheckout(planConfig.pricing.monthly.stripePriceId, user.uid);
+      } catch (checkoutError) {
+        console.error('Checkout error:', checkoutError);
+        setError(`Failed to start checkout process: ${checkoutError.message || 'Please try again or contact support.'}`);
+        setLoading(false);
+        return;
+      }
     } catch (error) {
       console.error('Signup error:', error);
       if (error.code === 'auth/email-already-in-use') {
@@ -123,6 +141,8 @@ const SignupPage = () => {
         setError('Please enter a valid email address.');
       } else if (error.code === 'auth/weak-password') {
         setError('Password is too weak. Please choose a stronger password.');
+      } else if (error.code === 'permission-denied') {
+        setError('Permission denied. Please check your account permissions.');
       } else {
         setError(error.message || 'An error occurred during signup. Please try again.');
       }

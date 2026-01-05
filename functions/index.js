@@ -4,6 +4,7 @@
 
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
+const express = require('express');
 
 // Initialize Stripe - handle missing config gracefully
 let stripe = null;
@@ -56,7 +57,8 @@ exports.createCheckoutSession = functions.https.onCall(async (data, context) => 
 
   try {
     // Get user document to check for existing Stripe customer
-    const userDoc = await admin.firestore().collection('users').doc(userId).get();
+    const userDocRef = admin.firestore().collection('users').doc(userId);
+    const userDoc = await userDocRef.get();
     let customerId = userDoc.data()?.stripeCustomerId;
 
     // Create Stripe customer if doesn't exist
@@ -69,10 +71,10 @@ exports.createCheckoutSession = functions.https.onCall(async (data, context) => 
       });
       customerId = customer.id;
 
-      // Save customer ID to user document
-      await admin.firestore().collection('users').doc(userId).update({
+      // Save customer ID to user document (use set with merge to handle case where doc doesn't exist)
+      await userDocRef.set({
         stripeCustomerId: customerId,
-      });
+      }, { merge: true });
     }
 
     // Create checkout session
@@ -119,6 +121,14 @@ exports.createCheckoutSession = functions.https.onCall(async (data, context) => 
  * Called from the frontend when a user wants to manage their subscription.
  */
 exports.createPortalSession = functions.https.onCall(async (data, context) => {
+  // Check if Stripe is configured
+  if (!stripe) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'Stripe is not configured. Please set stripe.secret_key in Firebase Functions config.'
+    );
+  }
+
   // Verify user is authenticated
   if (!context.auth) {
     throw new functions.https.HttpsError(
@@ -174,7 +184,10 @@ exports.createPortalSession = functions.https.onCall(async (data, context) => {
  * This function handles Stripe webhook events to keep user subscriptions in sync.
  * Must be configured in Stripe Dashboard → Webhooks.
  */
-exports.stripeWebhook = functions.https.onRequest(async (req, res) => {
+const webhookApp = express();
+webhookApp.use(express.raw({ type: 'application/json' }));
+
+webhookApp.post('/', async (req, res) => {
   // Check if Stripe is configured
   if (!stripe) {
     res.status(500).send('Stripe is not configured. Please set stripe.secret_key in Firebase Functions config.');
@@ -192,7 +205,7 @@ exports.stripeWebhook = functions.https.onRequest(async (req, res) => {
   let event;
 
   try {
-    event = stripe.webhooks.constructEvent(req.rawBody, sig, webhookSecret);
+    event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
   } catch (err) {
     console.error('Webhook signature verification failed:', err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
@@ -226,6 +239,8 @@ exports.stripeWebhook = functions.https.onRequest(async (req, res) => {
   }
 });
 
+exports.stripeWebhook = functions.https.onRequest(webhookApp);
+
 /**
  * Handle checkout.session.completed event
  */
@@ -238,29 +253,46 @@ async function handleCheckoutCompleted(event) {
     return;
   }
 
-  // Retrieve the subscription
-  const subscription = await stripe.subscriptions.retrieve(session.subscription);
-  const priceId = subscription.items.data[0].price.id;
+  // Check if subscription exists (it should for subscription mode)
+  if (!session.subscription) {
+    console.error('No subscription ID in checkout session');
+    return;
+  }
 
-  // Determine tier from price ID
-  const tier = getTierFromPriceId(priceId);
+  try {
+    // Retrieve the subscription
+    const subscription = await stripe.subscriptions.retrieve(session.subscription);
+    
+    if (!subscription || !subscription.items || !subscription.items.data || subscription.items.data.length === 0) {
+      console.error('Invalid subscription data retrieved');
+      return;
+    }
 
-  // Update user document
-  await admin.firestore().collection('users').doc(userId).update({
-    subscriptionStatus: 'active',
-    subscriptionTier: tier,
-    stripeSubscriptionId: subscription.id,
-    currentPeriodStart: admin.firestore.Timestamp.fromMillis(
-      subscription.current_period_start * 1000
-    ),
-    currentPeriodEnd: admin.firestore.Timestamp.fromMillis(
-      subscription.current_period_end * 1000
-    ),
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  });
+    const priceId = subscription.items.data[0].price.id;
 
-  // Update limits based on tier
-  await updateUserLimits(userId, tier);
+    // Determine tier from price ID
+    const tier = getTierFromPriceId(priceId);
+
+    // Update user document
+    await admin.firestore().collection('users').doc(userId).update({
+      subscriptionStatus: 'active',
+      subscriptionTier: tier,
+      stripeSubscriptionId: subscription.id,
+      currentPeriodStart: admin.firestore.Timestamp.fromMillis(
+        subscription.current_period_start * 1000
+      ),
+      currentPeriodEnd: admin.firestore.Timestamp.fromMillis(
+        subscription.current_period_end * 1000
+      ),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    // Update limits based on tier
+    await updateUserLimits(userId, tier);
+  } catch (error) {
+    console.error('Error handling checkout completed:', error);
+    // Don't throw - log the error but don't fail the webhook
+  }
 }
 
 /**

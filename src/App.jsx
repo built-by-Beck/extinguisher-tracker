@@ -3009,6 +3009,25 @@ function App() {
           </button>
         </div>
 
+        {/* Add New Building Button - Always Visible */}
+        <div className="bg-white p-4 rounded-lg shadow mb-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="font-semibold text-lg mb-1">Buildings</h3>
+              <p className="text-sm text-gray-600">
+                {buildings.length} building{buildings.length !== 1 ? 's' : ''} defined
+              </p>
+            </div>
+            <button
+              onClick={() => setShowBuildingsModal(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600 transition shadow-md"
+            >
+              <Plus size={20} />
+              Add New Building
+            </button>
+          </div>
+        </div>
+
         <div className="bg-white p-4 rounded-lg shadow mb-6">
           <div
             className="flex items-center justify-between mb-4 cursor-pointer"
@@ -3113,12 +3132,13 @@ function App() {
                   onFail={handleFail}
                   onEdit={handleEdit}
                   onSaveNotes={handleSaveNotes}
+                  onReplace={openReplaceModal}
                 />
               }
             />
             <Route
               path="extinguisher/:assetId"
-              element={<ExtinguisherDetailView extinguishers={extinguishers} />}
+              element={<ExtinguisherDetailView extinguishers={extinguishers} onReplace={openReplaceModal} />}
             />
             <Route
               path="calculator"

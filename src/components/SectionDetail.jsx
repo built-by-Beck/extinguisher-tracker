@@ -2,7 +2,7 @@ import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Info } from 'lucide-react';
 
-export default function SectionDetail({ extinguishers, onSelectItem, getViewMode, toggleView, countsFor, onPass, onFail, onEdit, onSaveNotes }) {
+export default function SectionDetail({ extinguishers, onSelectItem, getViewMode, toggleView, countsFor, onPass, onFail, onEdit, onSaveNotes, onReplace }) {
   const { name } = useParams();
   const navigate = useNavigate();
   const section = decodeURIComponent(name || '');
@@ -448,6 +448,9 @@ export default function SectionDetail({ extinguishers, onSelectItem, getViewMode
 
             <div className="p-4 border-t bg-gray-50 flex flex-wrap gap-2 justify-end">
               <button onClick={() => { onEdit?.(activeItem); }} className="px-4 py-2 rounded bg-gray-200 hover:bg-gray-300">Edit</button>
+              {onReplace && (
+                <button onClick={() => { onReplace?.(activeItem); }} className="px-4 py-2 rounded bg-amber-600 text-white hover:bg-amber-700">Replace</button>
+              )}
               <button onClick={() => {
                 const inspectionData = { checklistData: checklist, notes, photo: photoFile || null, gps: gps || null };
                 onSaveNotes?.(activeItem, checklistSummary(), inspectionData);

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, MapPin, Calendar, CheckCircle, XCircle, Circle, Image as ImageIcon, ChevronDown, ChevronUp, ExternalLink } from 'lucide-react';
+import { ArrowLeft, MapPin, Calendar, CheckCircle, XCircle, Circle, Image as ImageIcon, ChevronDown, ChevronUp, ExternalLink, RotateCcw } from 'lucide-react';
 
 /**
  * ExtinguisherDetailView - Full-page view showing all information about a fire extinguisher
@@ -11,7 +11,7 @@ import { ArrowLeft, MapPin, Calendar, CheckCircle, XCircle, Circle, Image as Ima
  * - Asset details prominently displayed
  * - Navigation from main list and section detail
  */
-const ExtinguisherDetailView = ({ extinguishers }) => {
+const ExtinguisherDetailView = ({ extinguishers, onReplace }) => {
   const { assetId } = useParams();
   const navigate = useNavigate();
   const [showAllPhotos, setShowAllPhotos] = useState(false);
@@ -407,6 +407,22 @@ const ExtinguisherDetailView = ({ extinguishers }) => {
             </div>
           )}
         </div>
+
+        {/* Action Buttons */}
+        {onReplace && (
+          <div className="mt-6 pt-6 border-t border-gray-700">
+            <button
+              onClick={() => onReplace(extinguisher)}
+              className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition shadow-lg font-semibold text-lg"
+            >
+              <RotateCcw size={24} />
+              Replace Extinguisher
+            </button>
+            <p className="text-xs text-gray-400 text-center mt-2">
+              Replace this extinguisher with a new one. The old extinguisher data will be archived.
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );

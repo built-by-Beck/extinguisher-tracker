@@ -40,7 +40,7 @@ const LandingPage = () => {
               to="/app"
               className="bg-red-600 text-white px-8 py-4 rounded-lg text-lg font-semibold hover:bg-red-700 transition"
             >
-              Start Free Trial
+              Get Started
             </Link>
             <Link
               to="/features"

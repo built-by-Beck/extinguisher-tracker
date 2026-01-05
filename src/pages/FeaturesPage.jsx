@@ -390,14 +390,14 @@ const FeaturesPage = () => {
             Ready to Experience These Features?
           </h2>
           <p className="text-xl mb-8 opacity-90">
-            Start your free trial today and see how Fire Extinguisher Tracker can transform your inspection process.
+            Get started today and see how Fire Extinguisher Tracker can transform your inspection process.
           </p>
           <div className="flex justify-center gap-4">
             <Link
               to="/app"
               className="bg-white text-red-600 px-8 py-4 rounded-lg text-lg font-semibold hover:bg-gray-100 transition"
             >
-              Start Free Trial
+              Get Started
             </Link>
             <Link
               to="/pricing"

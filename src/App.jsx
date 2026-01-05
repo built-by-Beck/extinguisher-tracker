@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Routes, Route, useNavigate, Link } from 'react-router-dom';
+import { signOut } from 'firebase/auth';
 import * as XLSX from 'xlsx';
 import { Search, Upload, CheckCircle, XCircle, Circle, Download, Filter, Edit2, Save, X, Menu, ScanLine, Plus, Clock, Play, Pause, StopCircle, LogOut, Camera, Calendar, Settings, RotateCcw, FileText, Calculator as CalculatorIcon, Shield, History } from 'lucide-react';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
@@ -8,6 +9,7 @@ import { auth, db, storage, workspacesRef } from './firebase';
 import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { deleteObject } from 'firebase/storage';
 import Login from './Login';
+import { isSubscriptionActive, hasFreeAccess, SUBSCRIPTION_TIERS, TIER_CONFIG } from './config/subscriptionTiers';
 import CameraScanner from './components/BarcodeScanner.jsx';
 import SectionGrid from './components/SectionGrid';
 import SectionDetail from './components/SectionDetail';
@@ -124,6 +126,10 @@ function App() {
   const [editingBuilding, setEditingBuilding] = useState(null);
   const [editBuildingName, setEditBuildingName] = useState('');
 
+  // Subscription state
+  const [userDoc, setUserDoc] = useState(null);
+  const [subscriptionValid, setSubscriptionValid] = useState(false);
+
   const scanInputRef = useRef(null);
   const fileInputRef = useRef(null);
   const dbBackupInputRef = useRef(null);
@@ -138,6 +144,52 @@ function App() {
     });
     return () => unsubscribe();
   }, []);
+
+  // Load user document and check subscription
+  useEffect(() => {
+    if (!user) {
+      setUserDoc(null);
+      setSubscriptionValid(false);
+      return;
+    }
+
+    const userDocRef = doc(db, 'users', user.uid);
+    const unsubscribeUser = onSnapshot(userDocRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        setUserDoc(data);
+        
+        // Check if subscription is active (includes free access check)
+        const active = isSubscriptionActive(
+          data.subscriptionStatus,
+          data.trialEndsAt?.toDate?.()?.getTime() || null,
+          user.email
+        );
+        setSubscriptionValid(active);
+      } else {
+        // User document doesn't exist yet - create it if free access
+        if (hasFreeAccess(user.email)) {
+          // Create free access user document
+          const proConfig = TIER_CONFIG[SUBSCRIPTION_TIERS.PRO];
+          setDoc(userDocRef, {
+            userId: user.uid,
+            email: user.email,
+            subscriptionTier: SUBSCRIPTION_TIERS.PRO,
+            subscriptionStatus: 'active',
+            limits: proConfig.limits,
+            usage: { extinguisherCount: 0 },
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          });
+        } else {
+          setUserDoc(null);
+          setSubscriptionValid(false);
+        }
+      }
+    });
+
+    return () => unsubscribeUser();
+  }, [user]);
 
   // Load workspaces and handle migration
   useEffect(() => {
@@ -230,30 +282,50 @@ function App() {
 
   // Load extinguishers filtered by current workspace (or all if no workspace)
   useEffect(() => {
-    if (!user) {
+    if (!user || buildings.length === 0) {
       setExtinguishers([]);
       return;
     }
 
-    // Load extinguishers from Firestore - filter by workspace if available, otherwise load all
-    const extinguishersQuery = currentWorkspaceId
-      ? query(
-          collection(db, 'extinguishers'),
+    // Set up listeners for each building's extinguishers subcollection
+    const unsubscribes = [];
+    let allExtinguishers = [];
+
+    const updateExtinguishers = () => {
+      setExtinguishers([...allExtinguishers]);
+    };
+
+    buildings.forEach(building => {
+      let buildingQuery = query(
+        getExtinguisherCollection(building.id),
+        where('userId', '==', user.uid)
+      );
+      
+      if (currentWorkspaceId) {
+        buildingQuery = query(
+          getExtinguisherCollection(building.id),
           where('userId', '==', user.uid),
           where('workspaceId', '==', currentWorkspaceId)
-        )
-      : query(
-          collection(db, 'extinguishers'),
-          where('userId', '==', user.uid)
         );
+      }
 
-    const unsubscribeExtinguishers = onSnapshot(extinguishersQuery, (snapshot) => {
-      console.log('Extinguishers snapshot received:', snapshot.docs.length, 'items for workspace:', currentWorkspaceId);
-      const extinguisherData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setExtinguishers(extinguisherData);
+      const unsubscribe = onSnapshot(buildingQuery, (snapshot) => {
+        // Remove old extinguishers from this building
+        allExtinguishers = allExtinguishers.filter(e => e.buildingId !== building.id);
+        
+        // Add new extinguishers from this building
+        snapshot.docs.forEach(doc => {
+          allExtinguishers.push({
+            id: doc.id,
+            buildingId: building.id,
+            ...doc.data()
+          });
+        });
+        
+        updateExtinguishers();
+      });
+      
+      unsubscribes.push(unsubscribe);
     });
 
     // Load section times from localStorage scoped to workspace
@@ -265,9 +337,9 @@ function App() {
     }
 
     return () => {
-      unsubscribeExtinguishers();
+      unsubscribes.forEach(unsub => unsub());
     };
-  }, [user, currentWorkspaceId]);
+  }, [user, currentWorkspaceId, buildings]);
 
   // Load section notes (global, not workspace-scoped)
   useEffect(() => {
@@ -344,47 +416,14 @@ function App() {
       buildingsData.sort((a, b) => a.name.localeCompare(b.name));
       setBuildings(buildingsData);
 
-      // If no buildings exist, check if user has existing extinguishers with sections
-      // and migrate those sections to buildings, or create a default building
+      // If no buildings exist, create a default building
+      // Note: Extinguishers are now stored as subcollections under buildings
       if (buildingsData.length === 0) {
-        const extinguishersQuery = query(
-          collection(db, 'extinguishers'),
-          where('userId', '==', user.uid)
-        );
-        const extinguishersSnap = await getDocs(extinguishersQuery);
-        
-        if (extinguishersSnap.docs.length > 0) {
-          // Get unique sections from existing extinguishers
-          const uniqueSections = [...new Set(extinguishersSnap.docs.map(doc => doc.data().section).filter(Boolean))];
-          
-          if (uniqueSections.length > 0) {
-            // Migrate existing sections to buildings
-            const batch = writeBatch(db);
-            uniqueSections.forEach(sectionName => {
-              const buildingRef = doc(collection(db, 'buildings'));
-              batch.set(buildingRef, {
-                userId: user.uid,
-                name: sectionName,
-                createdAt: new Date().toISOString()
-              });
-            });
-            await batch.commit();
-          } else {
-            // Create a default building
-            await addDoc(collection(db, 'buildings'), {
-              userId: user.uid,
-              name: 'Main Building',
-              createdAt: new Date().toISOString()
-            });
-          }
-        } else {
-          // New user - create a default building
-          await addDoc(collection(db, 'buildings'), {
-            userId: user.uid,
-            name: 'Main Building',
-            createdAt: new Date().toISOString()
-          });
-        }
+        await addDoc(collection(db, 'buildings'), {
+          userId: user.uid,
+          name: 'Main Building',
+          createdAt: new Date().toISOString()
+        });
       }
 
       // Update selectedSection if it's not in the buildings list
@@ -405,6 +444,56 @@ function App() {
 
     return () => unsubscribeBuildings();
   }, [user]);
+
+  // Helper functions for extinguisher subcollections
+  const getBuildingIdFromSection = (sectionName) => {
+    const building = buildings.find(b => b.name === sectionName);
+    return building ? building.id : null;
+  };
+
+  const getExtinguisherCollection = (buildingId) => {
+    return collection(db, 'buildings', buildingId, 'extinguishers');
+  };
+
+  const getExtinguisherDoc = (item) => {
+    // item should have buildingId (from new structure) or we need to find it
+    const buildingId = item.buildingId || getBuildingIdFromSection(item.section);
+    if (!buildingId) {
+      throw new Error('Building ID not found for extinguisher');
+    }
+    return doc(db, 'buildings', buildingId, 'extinguishers', item.id);
+  };
+
+  const getAllExtinguishers = async (filters = {}) => {
+    // Query all buildings and aggregate their extinguishers
+    const allExtinguishers = [];
+    for (const building of buildings) {
+      let buildingQuery = query(getExtinguisherCollection(building.id));
+      
+      // Apply filters
+      const constraints = [];
+      if (filters.userId) {
+        constraints.push(where('userId', '==', filters.userId));
+      }
+      if (filters.workspaceId) {
+        constraints.push(where('workspaceId', '==', filters.workspaceId));
+      }
+      
+      if (constraints.length > 0) {
+        buildingQuery = query(getExtinguisherCollection(building.id), ...constraints);
+      }
+      
+      const snapshot = await getDocs(buildingQuery);
+      snapshot.docs.forEach(doc => {
+        allExtinguishers.push({
+          id: doc.id,
+          buildingId: building.id,
+          ...doc.data()
+        });
+      });
+    }
+    return allExtinguishers;
+  };
 
   useEffect(() => {
     if (user && currentWorkspaceId && Object.keys(sectionTimes).length > 0) {
@@ -1277,9 +1366,16 @@ function App() {
           // Merge: update existing by assetId; add new otherwise. Never delete or overwrite photos/history.
           for (const item of parsed) {
             const existing = existingIndex.get(item.assetId);
+            // Get buildingId from section name
+            const buildingId = getBuildingIdFromSection(item.section);
+            if (!buildingId) {
+              console.warn(`Skipping item ${item.assetId}: building "${item.section}" not found`);
+              continue;
+            }
+            
             try {
               if (existing) {
-                const docRef = doc(db, 'extinguishers', existing.id);
+                const docRef = getExtinguisherDoc(existing);
                 await updateDoc(docRef, {
                   vicinity: item.vicinity,
                   serial: item.serial,
@@ -1290,7 +1386,7 @@ function App() {
                 });
                 updated += 1;
               } else {
-                await addDoc(collection(db, 'extinguishers'), {
+                await addDoc(getExtinguisherCollection(buildingId), {
                   assetId: item.assetId,
                   vicinity: item.vicinity,
                   serial: item.serial,
@@ -1301,6 +1397,7 @@ function App() {
                   notes: '',
                   inspectionHistory: [],
                   userId: user.uid,
+                  buildingId: buildingId,
                   workspaceId: currentWorkspaceId,
                   createdAt: new Date().toISOString()
                 });
@@ -1332,7 +1429,19 @@ function App() {
       return;
     }
 
+    if (!newItem.section) {
+      alert('Please select a building/section');
+      return;
+    }
+
     try {
+      // Get buildingId from section name
+      const buildingId = getBuildingIdFromSection(newItem.section);
+      if (!buildingId) {
+        alert('Building not found. Please select a valid building.');
+        return;
+      }
+
       // optional photo upload
       let assetPhotoUrl = null;
       if (newItemPhoto instanceof File) {
@@ -1353,13 +1462,14 @@ function App() {
         notes: '',
         inspectionHistory: [],
         userId: user.uid,
+        buildingId: buildingId,
         workspaceId: currentWorkspaceId,
         createdAt: new Date().toISOString(),
         photoUrl: assetPhotoUrl,
         location: newItemGps || null
       };
 
-      await addDoc(collection(db, 'extinguishers'), item);
+      await addDoc(getExtinguisherCollection(buildingId), item);
       setShowAddModal(false);
       const firstBuilding = getBuildingNames()[0] || '';
       setNewItem({
@@ -1404,7 +1514,7 @@ function App() {
         gps: gps
       };
 
-      const docRef = doc(db, 'extinguishers', item.id);
+      const docRef = getExtinguisherDoc(item);
       await updateDoc(docRef, {
         status,
         checkedDate: new Date().toISOString(),
@@ -1515,7 +1625,7 @@ function App() {
     if (!editItem) return;
 
     try {
-      const docRef = doc(db, 'extinguishers', editItem.id);
+      const docRef = getExtinguisherDoc(editItem);
       await updateDoc(docRef, {
         assetId: editItem.assetId,
         vicinity: editItem.vicinity,
@@ -1541,7 +1651,7 @@ function App() {
   const deleteItem = async (item) => {
     if (window.confirm(`Are you sure you want to delete fire extinguisher ${item.assetId}?`)) {
       try {
-        await deleteDoc(doc(db, 'extinguishers', item.id));
+        await deleteDoc(getExtinguisherDoc(item));
         setEditItem(null);
         alert('Fire extinguisher deleted successfully!');
       } catch (error) {
@@ -1553,7 +1663,7 @@ function App() {
 
   const resetStatus = async (item) => {
     try {
-      const docRef = doc(db, 'extinguishers', item.id);
+      const docRef = getExtinguisherDoc(item);
       await updateDoc(docRef, {
         status: 'pending',
         checkedDate: null,
@@ -1621,7 +1731,7 @@ function App() {
       await addDoc(collection(db, 'replacedExtinguishers'), archivedData);
 
       // 2. Update the existing extinguisher record with new info
-      const docRef = doc(db, 'extinguishers', replaceItem.id);
+      const docRef = getExtinguisherDoc(replaceItem);
       await updateDoc(docRef, {
         assetId: replaceFormData.newAssetId.trim() || replaceItem.assetId,
         serial: replaceFormData.newSerial.trim(),
@@ -2212,7 +2322,7 @@ function App() {
       }
       const gps = inspectionData?.gps;
 
-      const docRef = doc(db, 'extinguishers', item.id);
+      const docRef = getExtinguisherDoc(item);
       // Only update fields that are explicitly provided
       const updates = { notes: notesSummary || '' };
       if (inspectionData && typeof inspectionData.checklistData !== 'undefined') {
@@ -2240,7 +2350,7 @@ function App() {
     const sref = storageRef(storage, path);
     const snap = await uploadBytes(sref, file, { contentType: file.type });
     const url = await getDownloadURL(snap.ref);
-    const docRef = doc(db, 'extinguishers', asset.id);
+    const docRef = getExtinguisherDoc(asset);
     const next = [...photos, { url, uploadedAt: new Date().toISOString(), path }];
     await updateDoc(docRef, { photos: next });
     setSelectedItem({ ...asset, photos: next });
@@ -2250,7 +2360,7 @@ function App() {
     const photos = asset.photos || [];
     if (index <= 0 || index >= photos.length) return;
     const reordered = [photos[index], ...photos.slice(0, index), ...photos.slice(index + 1)];
-    const docRef = doc(db, 'extinguishers', asset.id);
+    const docRef = getExtinguisherDoc(asset);
     await updateDoc(docRef, { photos: reordered });
     setSelectedItem({ ...asset, photos: reordered });
   };
@@ -2259,7 +2369,7 @@ function App() {
     const photos = asset.photos || [];
     if (index < 0 || index >= photos.length) return;
     const removing = photos[index];
-    const docRef = doc(db, 'extinguishers', asset.id);
+    const docRef = getExtinguisherDoc(asset);
     const next = photos.filter((_, i) => i !== index);
     await updateDoc(docRef, { photos: next });
     // hard delete from storage (best-effort)
@@ -2282,25 +2392,34 @@ function App() {
 
     try {
       console.log('Starting reset process...');
-      const extinguishersQuery = query(
-        collection(db, 'extinguishers'),
-        where('userId', '==', user.uid)
-      );
-      console.log('Created query for user:', user.uid);
+      // Query all extinguishers from all buildings
+      const allExtinguishers = [];
+      for (const building of buildings) {
+        const buildingQuery = query(
+          getExtinguisherCollection(building.id),
+          where('userId', '==', user.uid)
+        );
+        const snapshot = await getDocs(buildingQuery);
+        snapshot.docs.forEach(doc => {
+          allExtinguishers.push({
+            id: doc.id,
+            buildingId: building.id,
+            ...doc.data()
+          });
+        });
+      }
+      console.log('Got', allExtinguishers.length, 'extinguishers across', buildings.length, 'buildings');
 
-      const snapshot = await getDocs(extinguishersQuery);
-      console.log('Got snapshot with', snapshot.docs.length, 'documents');
-
-      if (snapshot.docs.length === 0) {
+      if (allExtinguishers.length === 0) {
         alert('No extinguishers found to reset. Please import fire extinguisher data first.');
         return;
       }
 
       // Show current status counts
       const statusCounts = {
-        pass: snapshot.docs.filter(doc => doc.data().status === 'pass').length,
-        fail: snapshot.docs.filter(doc => doc.data().status === 'fail').length,
-        pending: snapshot.docs.filter(doc => doc.data().status === 'pending').length
+        pass: allExtinguishers.filter(e => e.status === 'pass').length,
+        fail: allExtinguishers.filter(e => e.status === 'fail').length,
+        pending: allExtinguishers.filter(e => e.status === 'pending').length
       };
       console.log('Current status counts:', statusCounts);
 
@@ -2309,16 +2428,16 @@ function App() {
         userId: user.uid,
         resetDate: currentDate,
         monthYear: currentMonth,
-        totalExtinguishers: snapshot.docs.length,
+        totalExtinguishers: allExtinguishers.length,
         passedCount: statusCounts.pass,
         failedCount: statusCounts.fail,
         pendingCount: statusCounts.pending,
-        extinguisherResults: snapshot.docs.map(doc => ({
-          assetId: doc.data().assetId,
-          section: doc.data().section,
-          status: doc.data().status,
-          checkedDate: doc.data().checkedDate,
-          notes: doc.data().notes
+        extinguisherResults: allExtinguishers.map(e => ({
+          assetId: e.assetId,
+          section: e.section,
+          status: e.status,
+          checkedDate: e.checkedDate,
+          notes: e.notes
         }))
       };
       console.log('Created inspection log:', inspectionLog);
@@ -2340,9 +2459,9 @@ function App() {
       }
 
       // Reset all extinguisher statuses
-      console.log('Starting to reset', snapshot.docs.length, 'extinguishers...');
-      const updatePromises = snapshot.docs.map(docSnapshot => {
-        const docRef = doc(db, 'extinguishers', docSnapshot.id);
+      console.log('Starting to reset', allExtinguishers.length, 'extinguishers...');
+      const updatePromises = allExtinguishers.map(ext => {
+        const docRef = doc(db, 'buildings', ext.buildingId, 'extinguishers', ext.id);
         return updateDoc(docRef, {
           status: 'pending',
           checkedDate: null,
@@ -2353,7 +2472,7 @@ function App() {
 
       await Promise.all(updatePromises);
       console.log('All extinguisher updates completed');
-      alert(`Monthly cycle reset complete!\n\n• ${snapshot.docs.length} extinguishers reset to "pending"\n• Previous inspection results saved to history\n• Ready for ${currentMonth} inspections`);
+      alert(`Monthly cycle reset complete!\n\n• ${allExtinguishers.length} extinguishers reset to "pending"\n• Previous inspection results saved to history\n• Ready for ${currentMonth} inspections`);
 
     } catch (error) {
       console.error('Error resetting monthly status:', error);
@@ -2499,6 +2618,42 @@ function App() {
   // Show login if not authenticated
   if (!user) {
     return <Login />;
+  }
+
+  // Check subscription status - block access if not active (unless free email)
+  // Wait for userDoc to load before blocking (userDoc === null means still loading)
+  if (userDoc !== null && !subscriptionValid && !hasFreeAccess(user.email)) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-white rounded-lg shadow-lg p-8 text-center">
+          <Shield className="mx-auto mb-4 text-red-600" size={64} />
+          <h1 className="text-2xl font-bold text-gray-900 mb-4">Subscription Required</h1>
+          <p className="text-gray-600 mb-6">
+            You need an active subscription to access the Fire Extinguisher Tracker.
+            {userDoc?.subscriptionStatus === 'incomplete' && (
+              <span className="block mt-2 text-sm">Please complete your payment to continue.</span>
+            )}
+            {userDoc?.subscriptionStatus === 'canceled' && (
+              <span className="block mt-2 text-sm">Your subscription has been canceled. Please renew to continue.</span>
+            )}
+          </p>
+          <div className="space-y-3">
+            <Link
+              to="/signup"
+              className="block w-full bg-red-600 text-white py-3 px-4 rounded-lg hover:bg-red-700 font-medium"
+            >
+              Subscribe Now
+            </Link>
+            <button
+              onClick={() => signOut(auth)}
+              className="block w-full bg-gray-200 text-gray-700 py-3 px-4 rounded-lg hover:bg-gray-300 font-medium"
+            >
+              Sign Out
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -3716,7 +3871,7 @@ function App() {
                       // Save to database on blur
                       const newValue = e.target.value.trim();
                       try {
-                        const docRef = doc(db, 'extinguishers', selectedItem.id);
+                        const docRef = getExtinguisherDoc(selectedItem);
                         await updateDoc(docRef, { manufactureYear: newValue });
                       } catch (err) {
                         console.error('Error saving manufacture year:', err);
@@ -3865,7 +4020,7 @@ function App() {
                 onBlur={async (e) => {
                   const newValue = e.target.value.trim();
                   try {
-                    const docRef = doc(db, 'extinguishers', selectedItem.id);
+                    const docRef = getExtinguisherDoc(selectedItem);
                     await updateDoc(docRef, { manufactureYear: newValue });
                   } catch (err) {
                     console.error('Error saving manufacture year:', err);

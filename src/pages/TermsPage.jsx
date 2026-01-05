@@ -79,8 +79,7 @@ const TermsPage = () => {
               <li>Price changes with 30 days advance notice</li>
             </ul>
             <p className="text-gray-600 mb-4">
-              We offer a 30-day free trial for new users. No credit card is required to start the trial.
-              You may cancel at any time during the trial period without charge.
+              Access to the Service requires a paid subscription. You may cancel your subscription at any time.
             </p>
           </section>
 

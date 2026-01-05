@@ -195,13 +195,36 @@ export function getSubscriptionStatusMessage(status, trialEndsAt) {
 }
 
 /**
- * Check if subscription is active (includes trial)
+ * List of email addresses that get free access (no subscription required)
  */
-export function isSubscriptionActive(status, trialEndsAt = null) {
+export const FREE_ACCESS_EMAILS = [
+  'davidbeck.aka.db@gmail.com',
+  'davidrandallbeck22@gmail.com',
+  'davidbeck@beck--publishing.com'
+];
+
+/**
+ * Check if an email address has free access
+ */
+export function hasFreeAccess(email) {
+  if (!email) return false;
+  return FREE_ACCESS_EMAILS.includes(email.toLowerCase().trim());
+}
+
+/**
+ * Check if subscription is active (includes free access emails)
+ */
+export function isSubscriptionActive(status, trialEndsAt = null, email = null) {
+  // Free access emails always have active subscription
+  if (email && hasFreeAccess(email)) {
+    return true;
+  }
+
   if (status === SUBSCRIPTION_STATUS.ACTIVE) return true;
 
+  // No free trials for regular users
   if (status === SUBSCRIPTION_STATUS.TRIALING && trialEndsAt) {
-    return Date.now() < trialEndsAt;
+    return false; // Trials are disabled
   }
 
   return false;

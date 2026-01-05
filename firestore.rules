@@ -1,60 +1,137 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // Helper function to check if user is authenticated
-    function isAuthenticated() {
+
+    function signedIn() {
       return request.auth != null;
     }
-    
-    // Helper function to check if user owns the resource
-    function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
+
+    function isOwner(ownerId) {
+      return signedIn() && ownerId == request.auth.uid;
     }
-    
-    // Users can only read/write their own user document
+
+    // Basic type guards (helps prevent garbage writes)
+    function isString(x) { return x is string; }
+    function isNullOrString(x) { return x == null || x is string; }
+    function isNullOrMap(x) { return x == null || x is map; }
+    function isNullOrList(x) { return x == null || x is list; }
+
+    // -------------------------
+    // Users
+    // -------------------------
     match /users/{userId} {
       allow read, write: if isOwner(userId);
     }
-    
-    // Users can only access their own workspaces
+
+    // -------------------------
+    // Workspaces
+    // -------------------------
     match /workspaces/{workspaceId} {
-      allow read, write: if isAuthenticated() &&
+      allow read: if signedIn() &&
         (resource == null || resource.data.userId == request.auth.uid);
-      allow create: if isAuthenticated() &&
+      allow create: if signedIn() &&
         request.resource.data.userId == request.auth.uid;
+      allow update, delete: if signedIn() &&
+        resource.data.userId == request.auth.uid
+        && request.resource.data.userId == resource.data.userId;
     }
-    
-    // Users can only access their own extinguishers
-    match /extinguishers/{extinguisherId} {
-      allow read, write: if isAuthenticated() &&
-        (resource == null || resource.data.userId == request.auth.uid);
-      allow create: if isAuthenticated() &&
-        request.resource.data.userId == request.auth.uid;
-    }
-    
-    // Users can only access their own buildings
+
+    // -------------------------
+    // Buildings (top-level)
+    // -------------------------
     match /buildings/{buildingId} {
-      allow read: if isAuthenticated() &&
+      // Read: only the owner can read/list their own buildings
+      allow get, list: if signedIn() && 
         (resource == null || resource.data.userId == request.auth.uid);
-      allow create: if isAuthenticated() &&
-        request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isAuthenticated() &&
-        resource.data.userId == request.auth.uid;
+
+      // Create: user can create a building only for themselves
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && isString(request.resource.data.name);
+
+      // Update/Delete: only owner + prevent userId hijacking
+      allow update, delete: if signedIn()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == resource.data.userId;
+
+      // --------------------------------------------
+      // Extinguishers as a subcollection of a building
+      // --------------------------------------------
+      match /extinguishers/{extinguisherId} {
+        function buildingDoc() {
+          return get(/databases/$(database)/documents/buildings/$(buildingId));
+        }
+
+        function buildingOwnerId() {
+          return buildingDoc().data.userId;
+        }
+
+        // Read: only building owner
+        allow get, list: if signedIn()
+          && buildingDoc() != null
+          && buildingOwnerId() == request.auth.uid;
+
+        // Create: only building owner, and extinguisher must "belong" to that building
+        allow create: if signedIn()
+          && buildingDoc() != null
+          && buildingOwnerId() == request.auth.uid
+          && request.resource.data.userId == request.auth.uid
+          && request.resource.data.buildingId == buildingId
+
+          // --- minimal field validation (optional but recommended) ---
+          && isNullOrString(request.resource.data.assetId)
+          && isNullOrString(request.resource.data.serial)
+          && isNullOrString(request.resource.data.location)
+          && isNullOrString(request.resource.data.vicinity)
+          && isNullOrString(request.resource.data.parentLocation)
+          && isNullOrString(request.resource.data.section)
+          && isNullOrString(request.resource.data.status)
+          && isNullOrString(request.resource.data.manufactureYear)
+          && isNullOrString(request.resource.data.checkedDate)
+          && isNullOrString(request.resource.data.createdAt)
+          && isNullOrString(request.resource.data.updatedAt)
+          && isNullOrString(request.resource.data.importedAt)
+          && isNullOrString(request.resource.data.importedFrom)
+          && isNullOrString(request.resource.data.workspaceId)
+          && isNullOrString(request.resource.data.notes)
+          && isNullOrString(request.resource.data.photoUrl)
+          && isNullOrString(request.resource.data.lastInspectionPhotoUrl)
+          && isNullOrString(request.resource.data.lastMonthlyReset)
+          && isNullOrMap(request.resource.data.gps)
+          && isNullOrMap(request.resource.data.location)
+          && isNullOrMap(request.resource.data.lastInspectionGps)
+          && isNullOrList(request.resource.data.inspectionHistory)
+          && isNullOrList(request.resource.data.photos)
+          && isNullOrMap(request.resource.data.checklistData);
+
+        // Update/Delete: only building owner + prevent moving it to another building + prevent ownerId swap
+        allow update, delete: if signedIn()
+          && buildingDoc() != null
+          && buildingOwnerId() == request.auth.uid
+          && resource.data.userId == request.auth.uid
+          && request.resource.data.userId == resource.data.userId
+          && request.resource.data.buildingId == resource.data.buildingId;
+      }
     }
-    
-    // Users can only access their own section notes
+
+    // -------------------------
+    // Section Notes
+    // -------------------------
     match /sectionNotes/{noteId} {
-      allow read, write: if isAuthenticated() &&
+      allow read: if signedIn() &&
         (resource == null || resource.data.userId == request.auth.uid);
-      allow create: if isAuthenticated() &&
+      allow create: if signedIn() &&
         request.resource.data.userId == request.auth.uid;
+      allow update, delete: if signedIn() &&
+        resource.data.userId == request.auth.uid
+        && request.resource.data.userId == resource.data.userId;
     }
-    
-    // Inspection logs - users can read/write their own
+
+    // -------------------------
+    // Inspection Logs
+    // -------------------------
     match /inspectionLogs/{logId} {
-      allow read, write: if isAuthenticated();
+      allow read, write: if signedIn();
     }
   }
 }
-

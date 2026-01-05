@@ -197,7 +197,7 @@ const AboutPage = () => {
             to="/app"
             className="bg-white text-red-600 px-8 py-4 rounded-lg text-lg font-semibold hover:bg-gray-100 transition inline-block"
           >
-            Start Your Free Trial
+            Get Started
           </Link>
         </div>
       </section>

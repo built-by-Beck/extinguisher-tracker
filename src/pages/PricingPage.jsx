@@ -30,7 +30,7 @@ const PricingPage = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
           <h1 className="text-5xl font-bold mb-6">Simple, Transparent Pricing</h1>
           <p className="text-xl opacity-90 max-w-3xl mx-auto">
-            Choose the plan that's right for your organization. All plans include core features with a 30-day free trial.
+            Choose the plan that's right for your organization. All plans include full access to core features.
           </p>
         </div>
       </section>
@@ -241,10 +241,10 @@ const PricingPage = () => {
 
         <div className="space-y-6">
           <div className="bg-white p-6 rounded-lg shadow">
-            <h3 className="text-xl font-bold mb-3">How does the free trial work?</h3>
+            <h3 className="text-xl font-bold mb-3">How do I get started?</h3>
             <p className="text-gray-600">
-              All plans include a 30-day free trial with full access to features. No credit card required to start.
-              You can upgrade, downgrade, or cancel at any time during or after the trial period.
+              Simply choose a plan and complete the signup process. You'll have immediate access to all features included in your selected plan.
+              You can upgrade, downgrade, or cancel at any time.
             </p>
           </div>
 
@@ -297,10 +297,10 @@ const PricingPage = () => {
       <section className="bg-gradient-to-r from-red-600 to-red-700 text-white py-20">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
           <h2 className="text-4xl font-bold mb-6">
-            Start Your Free 30-Day Trial Today
+            Get Started Today
           </h2>
           <p className="text-xl mb-8 opacity-90">
-            No credit card required. Full access to all features. Cancel anytime.
+            Choose a plan and start tracking your fire extinguishers immediately.
           </p>
           <Link
             to="/signup"

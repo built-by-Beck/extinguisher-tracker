@@ -4,7 +4,7 @@ import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 import { redirectToCheckout } from '../services/stripeService';
-import { SUBSCRIPTION_TIERS, TIER_CONFIG } from '../config/subscriptionTiers';
+import { SUBSCRIPTION_TIERS, TIER_CONFIG, hasFreeAccess } from '../config/subscriptionTiers';
 import { Shield, Lock, User, AlertCircle, Loader } from 'lucide-react';
 
 const SignupPage = () => {
@@ -50,26 +50,58 @@ const SignupPage = () => {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
-      // Create user document in Firestore with trial status
-      const trialEndsAt = new Date();
-      trialEndsAt.setDate(trialEndsAt.getDate() + 30); // 30-day trial
+      // Check if user has free access
+      const isFreeUser = hasFreeAccess(email);
+      
+      if (isFreeUser) {
+        // Free access users get Pro tier with active status (no payment required)
+        const proConfig = TIER_CONFIG[SUBSCRIPTION_TIERS.PRO];
+        const userDoc = {
+          userId: user.uid,
+          email: user.email,
+          createdAt: serverTimestamp(),
+          subscriptionTier: SUBSCRIPTION_TIERS.PRO,
+          subscriptionStatus: 'active', // Free access = active status
+          limits: {
+            maxExtinguishers: proConfig.limits.maxExtinguishers,
+            photosEnabled: proConfig.limits.photosEnabled,
+            maxPhotosPerUnit: proConfig.limits.maxPhotosPerUnit,
+            gpsEnabled: proConfig.limits.gpsEnabled,
+            advancedExportEnabled: proConfig.limits.advancedExportEnabled,
+            inspectionHistoryEnabled: proConfig.limits.inspectionHistoryEnabled,
+            prioritySupport: proConfig.limits.prioritySupport,
+          },
+          usage: {
+            extinguisherCount: 0,
+            lastUpdated: serverTimestamp(),
+          },
+          lastLoginAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        };
 
+        await setDoc(doc(db, 'users', user.uid), userDoc);
+        
+        // Redirect to app (no payment needed)
+        navigate('/app');
+        return;
+      }
+
+      // Regular users must pay immediately - no free trial
+      // Create user document with incomplete status (will be updated after payment)
       const userDoc = {
         userId: user.uid,
         email: user.email,
         createdAt: serverTimestamp(),
         subscriptionTier: validPlan,
-        subscriptionStatus: 'trialing',
-        trialStartedAt: serverTimestamp(),
-        trialEndsAt: trialEndsAt,
+        subscriptionStatus: 'incomplete', // Requires payment
         limits: {
-          maxExtinguishers: planConfig.limits.maxExtinguishers,
-          photosEnabled: planConfig.limits.photosEnabled,
-          maxPhotosPerUnit: planConfig.limits.maxPhotosPerUnit,
-          gpsEnabled: planConfig.limits.gpsEnabled,
-          advancedExportEnabled: planConfig.limits.advancedExportEnabled,
-          inspectionHistoryEnabled: planConfig.limits.inspectionHistoryEnabled,
-          prioritySupport: planConfig.limits.prioritySupport,
+          maxExtinguishers: 0, // No access until paid
+          photosEnabled: false,
+          maxPhotosPerUnit: 0,
+          gpsEnabled: false,
+          advancedExportEnabled: false,
+          inspectionHistoryEnabled: false,
+          prioritySupport: false,
         },
         usage: {
           extinguisherCount: 0,
@@ -81,7 +113,7 @@ const SignupPage = () => {
 
       await setDoc(doc(db, 'users', user.uid), userDoc);
 
-      // Redirect to Stripe Checkout
+      // Redirect to Stripe Checkout (payment required)
       await redirectToCheckout(planConfig.pricing.monthly.stripePriceId, user.uid);
     } catch (error) {
       console.error('Signup error:', error);

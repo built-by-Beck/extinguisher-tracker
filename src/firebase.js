@@ -34,7 +34,17 @@ try {
   console.warn('Failed to enable Firestore persistence:', e);
 }
 export const auth = getAuth(app);
-export const analytics = getAnalytics(app);
+
+// Initialize Analytics only in browser environment
+let analytics = null;
+try {
+  if (typeof window !== 'undefined') {
+    analytics = getAnalytics(app);
+  }
+} catch (e) {
+  console.warn('Failed to initialize Firebase Analytics:', e);
+}
+export { analytics };
 
 // Collection references
 export const workspacesRef = collection(db, 'workspaces');

@@ -32,7 +32,7 @@ export const TIER_CONFIG = {
       monthly: {
         amount: 2900, // cents ($29/month)
         interval: 'month',
-        stripePriceId: process.env.VITE_STRIPE_PRICE_BASIC_MONTHLY || 'price_basic_monthly',
+        stripePriceId: import.meta.env.VITE_STRIPE_PRICE_BASIC_MONTHLY || 'price_basic_monthly',
       },
     },
 
@@ -66,7 +66,7 @@ export const TIER_CONFIG = {
       monthly: {
         amount: 7900, // cents ($79/month)
         interval: 'month',
-        stripePriceId: process.env.VITE_STRIPE_PRICE_PRO_MONTHLY || 'price_pro_monthly',
+        stripePriceId: import.meta.env.VITE_STRIPE_PRICE_PRO_MONTHLY || 'price_pro_monthly',
       },
     },
 

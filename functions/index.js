@@ -4,7 +4,19 @@
 
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
-const stripe = require('stripe')(functions.config().stripe.secret_key);
+
+// Initialize Stripe - handle missing config gracefully
+let stripe = null;
+try {
+  const stripeConfig = functions.config().stripe;
+  if (stripeConfig && stripeConfig.secret_key) {
+    stripe = require('stripe')(stripeConfig.secret_key);
+  } else {
+    console.warn('Stripe secret key not configured. Stripe functions will not work until configured.');
+  }
+} catch (error) {
+  console.warn('Error initializing Stripe:', error.message);
+}
 
 admin.initializeApp();
 
@@ -15,6 +27,14 @@ admin.initializeApp();
  * Called from the frontend when a user wants to subscribe.
  */
 exports.createCheckoutSession = functions.https.onCall(async (data, context) => {
+  // Check if Stripe is configured
+  if (!stripe) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'Stripe is not configured. Please set stripe.secret_key in Firebase Functions config.'
+    );
+  }
+  
   // Verify user is authenticated
   if (!context.auth) {
     throw new functions.https.HttpsError(
@@ -155,8 +175,19 @@ exports.createPortalSession = functions.https.onCall(async (data, context) => {
  * Must be configured in Stripe Dashboard → Webhooks.
  */
 exports.stripeWebhook = functions.https.onRequest(async (req, res) => {
+  // Check if Stripe is configured
+  if (!stripe) {
+    res.status(500).send('Stripe is not configured. Please set stripe.secret_key in Firebase Functions config.');
+    return;
+  }
+  
   const sig = req.headers['stripe-signature'];
-  const webhookSecret = functions.config().stripe.webhook_secret;
+  const webhookSecret = functions.config().stripe?.webhook_secret;
+  
+  if (!webhookSecret) {
+    res.status(500).send('Stripe webhook secret is not configured.');
+    return;
+  }
 
   let event;
 

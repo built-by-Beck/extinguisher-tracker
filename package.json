@@ -11,6 +11,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@stripe/react-stripe-js": "^5.4.1",
     "@stripe/stripe-js": "^8.6.0",
     "@undecaf/barcode-detector-polyfill": "^0.9.23",
     "@zxing/browser": "^0.1.5",

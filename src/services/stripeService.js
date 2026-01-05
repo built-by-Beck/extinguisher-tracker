@@ -21,6 +21,8 @@ function getFunctionsInstance() {
 
 /**
  * Get Stripe instance
+ * Note: This is now also initialized in main.jsx via StripeProvider
+ * but kept here for backward compatibility
  */
 export function getStripe() {
   if (!stripePromise) {

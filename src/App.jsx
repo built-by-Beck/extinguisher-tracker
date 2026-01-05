@@ -2063,6 +2063,10 @@ function App() {
     }
 
     try {
+      if (!user || !user.uid) {
+        throw new Error('User not authenticated');
+      }
+      
       await addDoc(collection(db, 'buildings'), {
         userId: user.uid,
         name: newBuildingName.trim(),
@@ -2072,7 +2076,10 @@ function App() {
       alert('Building added successfully!');
     } catch (error) {
       console.error('Error adding building:', error);
-      alert('Error adding building. Please try again.');
+      const errorMessage = error?.code === 'permission-denied' 
+        ? 'Permission denied. Please check Firestore security rules allow writes to the buildings collection.'
+        : error?.message || 'Unknown error occurred';
+      alert(`Error adding building: ${errorMessage}`);
     }
   };
 
